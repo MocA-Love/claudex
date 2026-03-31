@@ -30,6 +30,7 @@ export interface ProxyOptions {
   safeMode: boolean;
   workspaceSummary?: string;
   upstreamWireApi: "messages" | "responses";
+  serviceTier?: "fast" | "flex";
 }
 
 function writeJson(res: http.ServerResponse, statusCode: number, data: unknown): void {
@@ -145,10 +146,14 @@ function appendUniqueIncludeValues(target: JsonObject, values: string[]): void {
   }
 }
 
+function mapServiceTierForResponses(serviceTier: "fast" | "flex"): "priority" | "flex" {
+  return serviceTier === "fast" ? "priority" : "flex";
+}
+
 function adaptAnthropicMessagesRequestForResponses(
   parsed: JsonObject,
   options: ProxyOptions,
-  omitMaxOutputTokens = false
+  chatgptCodexCompatibilityMode = false
 ): JsonObject {
   const adapted: JsonObject = {
     model: typeof parsed.model === "string" && parsed.model.trim().length > 0 ? parsed.model : options.forcedModel,
@@ -196,8 +201,12 @@ function adaptAnthropicMessagesRequestForResponses(
 
   const maxOutputTokens =
     parsePositiveInteger(parsed.max_output_tokens) ?? parsePositiveInteger(parsed.max_tokens);
-  if (!omitMaxOutputTokens && maxOutputTokens !== undefined) {
+  if (!chatgptCodexCompatibilityMode && maxOutputTokens !== undefined) {
     adapted.max_output_tokens = maxOutputTokens;
+  }
+
+  if (chatgptCodexCompatibilityMode && options.serviceTier) {
+    adapted.service_tier = mapServiceTierForResponses(options.serviceTier);
   }
 
   if (typeof parsed.stream === "boolean") {

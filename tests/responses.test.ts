@@ -301,6 +301,27 @@ describe("responses bridge", () => {
     expect(adapted.max_output_tokens).toBeUndefined();
   });
 
+  test("maps fast service_tier to priority for chatgpt codex compatibility mode", () => {
+    const adapted = adaptAnthropicMessagesRequestForResponses(
+      {
+        model: "claude-sonnet-4-6",
+        messages: [{ role: "user", content: [{ type: "text", text: "Find foo" }] }],
+      },
+      {
+        forcedModel: "gpt-5.3-codex",
+        defaultReasoningEffort: "xhigh",
+        preserveClientEffort: false,
+        debug: false,
+        safeMode: false,
+        upstreamWireApi: "responses",
+        serviceTier: "fast",
+      },
+      true
+    );
+
+    expect(adapted.service_tier).toBe("priority");
+  });
+
   test("adds web search sources include when web_search tool is present", () => {
     const adapted = adaptAnthropicMessagesRequestForResponses(
       {

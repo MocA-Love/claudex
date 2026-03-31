@@ -53,6 +53,7 @@ Optional environment variables:
 - `CLAUDEX_CHATGPT_ACCOUNT_ID` (override `ChatGPT-Account-Id` header)
 - `CLAUDEX_CHATGPT_BASE_URL` (default: `https://chatgpt.com/backend-api/codex`)
 - `CLAUDEX_CHATGPT_DEFAULT_MODEL` (default: `gpt-5-codex` when ChatGPT mode is active and no model is explicitly configured)
+- `CLAUDEX_SERVICE_TIER` (`fast` or `flex`; forwarded as `service_tier` only for ChatGPT Codex responses mode. Falls back to `service_tier` from `~/.codex/config.toml` if present.)
 - `CLAUDEX_FORCE_LOGIN_METHOD` (default: `console`; set to `none` to disable injection)
 - `CLAUDEX_PORT`
 - `CLAUDEX_DEBUG=1`
