@@ -14,6 +14,7 @@ export interface RuntimeConfig {
   upstreamExtraHeaders: Record<string, string>;
   upstreamWireApi: "messages" | "responses";
   forcedModel: string;
+  serviceTier?: ServiceTier;
   authMode: "provider-api-key" | "chatgpt-token" | "chatgpt-api-key";
   chatgptRefreshConfig?: {
     authPath: string;
@@ -23,12 +24,24 @@ export interface RuntimeConfig {
 }
 
 export type ForcedModelSource = "cli" | "env" | "config" | "default";
+export type ServiceTier = "fast" | "flex";
 
 export function trimOrNull(value: unknown): string | null {
   if (typeof value === "string" && value.trim().length > 0) {
     return value.trim();
   }
   return null;
+}
+
+export function normalizeServiceTier(value: unknown): ServiceTier | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "fast" || normalized === "flex") {
+    return normalized;
+  }
+  return undefined;
 }
 
 export function resolveForcedModel(options: {
@@ -75,13 +88,17 @@ export function loadRuntimeConfig(options: { forcedModelOverride?: string } = {}
     trimOrNull(process.env.CLAUDEX_CHATGPT_BEARER_TOKEN) ||
     undefined;
   const envChatgptAccountId = trimOrNull(process.env.CLAUDEX_CHATGPT_ACCOUNT_ID) || undefined;
+  const envServiceTier = normalizeServiceTier(process.env.CLAUDEX_SERVICE_TIER);
 
   let configContents = "";
   let modelFromConfig: string | undefined;
+  let serviceTierFromConfig: ServiceTier | undefined;
   let resolvedProvider: ReturnType<typeof resolveUpstreamFromCodexConfig> | null = null;
   if (existsSync(configPath)) {
     configContents = readFileSync(configPath, "utf8");
-    modelFromConfig = parseCodexConfig(configContents).model;
+    const parsedConfig = parseCodexConfig(configContents);
+    modelFromConfig = parsedConfig.model;
+    serviceTierFromConfig = normalizeServiceTier(parsedConfig.serviceTier);
     try {
       resolvedProvider = resolveUpstreamFromCodexConfig(configContents, {
         providerOverride,
@@ -99,6 +116,7 @@ export function loadRuntimeConfig(options: { forcedModelOverride?: string } = {}
       wireApi: wireApiOverride,
     };
   }
+  const serviceTier = envServiceTier ?? serviceTierFromConfig;
 
   const defaultForcedModel = "gpt-5.3-codex";
   const { forcedModel, source: forcedModelSource } = resolveForcedModel({
@@ -122,6 +140,7 @@ export function loadRuntimeConfig(options: { forcedModelOverride?: string } = {}
       upstreamExtraHeaders: {},
       upstreamWireApi: resolvedProvider.wireApi || "messages",
       forcedModel,
+      serviceTier,
       authMode: "provider-api-key",
     };
   }
@@ -156,6 +175,7 @@ export function loadRuntimeConfig(options: { forcedModelOverride?: string } = {}
       upstreamExtraHeaders: extraHeaders,
       upstreamWireApi: "responses",
       forcedModel: chatgptForcedModel,
+      serviceTier,
       authMode: "chatgpt-token",
       chatgptRefreshConfig: canAutoRefresh
         ? {
@@ -177,6 +197,7 @@ export function loadRuntimeConfig(options: { forcedModelOverride?: string } = {}
       upstreamExtraHeaders: {},
       upstreamWireApi: "responses",
       forcedModel: chatgptForcedModel,
+      serviceTier,
       authMode: "chatgpt-api-key",
     };
   }

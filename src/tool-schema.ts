@@ -115,7 +115,31 @@ export function mapAnthropicToolsToResponsesTools(tools: unknown): Array<Record<
       continue;
     }
     const obj = tool as Record<string, unknown>;
+    const toolType = typeof obj.type === "string" ? obj.type.trim() : "";
     const name = typeof obj.name === "string" ? obj.name.trim() : "";
+
+    if (toolType === "web_search_20250305" || toolType === "web_search") {
+      const mappedTool: Record<string, unknown> = {
+        type: "web_search",
+      };
+
+      const allowedDomains = Array.isArray(obj.allowed_domains)
+        ? obj.allowed_domains.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        : [];
+      if (allowedDomains.length > 0) {
+        mappedTool.filters = {
+          allowed_domains: allowedDomains,
+        };
+      }
+
+      mapped.push(mappedTool);
+      continue;
+    }
+
+    if (toolType && toolType !== "custom" && toolType !== "function") {
+      continue;
+    }
+
     if (!name) {
       continue;
     }
@@ -173,6 +197,9 @@ export function mapAnthropicToolChoiceToResponsesToolChoice(toolChoice: unknown)
     return "required";
   }
   if ((type === "tool" || type === "function") && name) {
+    if (name === "web_search") {
+      return "required";
+    }
     return {
       type: "function",
       name,

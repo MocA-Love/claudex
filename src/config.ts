@@ -8,6 +8,7 @@ export interface ParsedCodexProvider {
 export interface ParsedCodexConfig {
   model?: string;
   modelProvider?: string;
+  serviceTier?: string;
   providers: Record<string, ParsedCodexProvider>;
 }
 
@@ -57,6 +58,7 @@ export function parseCodexConfig(contents: string): ParsedCodexConfig {
   return {
     model: parseTopLevelString(contents, "model"),
     modelProvider: parseTopLevelString(contents, "model_provider"),
+    serviceTier: parseTopLevelString(contents, "service_tier"),
     providers,
   };
 }

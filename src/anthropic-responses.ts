@@ -4,6 +4,232 @@ function textPartTypeForRole(role: string): "input_text" | "output_text" {
   return role === "assistant" ? "output_text" : "input_text";
 }
 
+function detectImageMediaTypeFromBuffer(buffer: Buffer): "image/png" | "image/jpeg" | "image/gif" | "image/webp" {
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (buffer.length >= 3 && buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) {
+    return "image/gif";
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x45 &&
+    buffer[10] === 0x42 &&
+    buffer[11] === 0x50
+  ) {
+    return "image/webp";
+  }
+  return "image/png";
+}
+
+function detectImageMediaTypeFromBase64(data: string): "image/png" | "image/jpeg" | "image/gif" | "image/webp" {
+  try {
+    return detectImageMediaTypeFromBuffer(Buffer.from(data, "base64"));
+  } catch {
+    return "image/png";
+  }
+}
+
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function maybeStringifyForModel(value: unknown): string {
+  const seen = new WeakSet<object>();
+  try {
+    return JSON.stringify(value ?? "", (_key, current) => {
+      if (typeof current === "string") {
+        return current.length > 4000 ? `${current.slice(0, 4000)}...[truncated]` : current;
+      }
+      if (!current || typeof current !== "object") {
+        return current;
+      }
+      if (seen.has(current)) {
+        return "[circular]";
+      }
+      seen.add(current);
+
+      if (Array.isArray(current)) {
+        return current;
+      }
+
+      const objectValue = current as Record<string, unknown>;
+      const sanitized: Record<string, unknown> = {};
+      for (const [key, nested] of Object.entries(objectValue)) {
+        if (key === "data" && typeof nested === "string" && nested.length > 256) {
+          sanitized[key] = "[base64 omitted]";
+          continue;
+        }
+        sanitized[key] = nested;
+      }
+      return sanitized;
+    });
+  } catch {
+    return String(value ?? "");
+  }
+}
+
+function normalizeResponsesImageDetail(detail: unknown): "auto" | "low" | "high" | "original" | undefined {
+  if (typeof detail !== "string") {
+    return undefined;
+  }
+
+  const normalized = detail.trim().toLowerCase();
+  if (normalized === "auto" || normalized === "low" || normalized === "high" || normalized === "original") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function mapAnthropicFilePart(partObject: Record<string, unknown>): Record<string, unknown> | undefined {
+  const source = partObject.source;
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return undefined;
+  }
+
+  const sourceObject = source as Record<string, unknown>;
+  const sourceType = typeof sourceObject.type === "string" ? sourceObject.type.trim().toLowerCase() : "";
+  const filename =
+    trimNonEmptyString(partObject.filename) ??
+    trimNonEmptyString(partObject.file_name) ??
+    trimNonEmptyString(sourceObject.filename) ??
+    trimNonEmptyString(sourceObject.file_name) ??
+    trimNonEmptyString(partObject.title);
+
+  if (sourceType === "base64" || (!sourceType && typeof sourceObject.data === "string")) {
+    const data = trimNonEmptyString(sourceObject.data);
+    if (!data) {
+      return undefined;
+    }
+
+    const mapped: Record<string, unknown> = {
+      type: "input_file",
+      file_data: data,
+    };
+    if (filename) {
+      mapped.filename = filename;
+    }
+    return mapped;
+  }
+
+  if (sourceType === "url" || (!sourceType && typeof sourceObject.url === "string")) {
+    const url = trimNonEmptyString(sourceObject.url);
+    if (!url) {
+      return undefined;
+    }
+
+    const mapped: Record<string, unknown> = {
+      type: "input_file",
+      file_url: url,
+    };
+    if (filename) {
+      mapped.filename = filename;
+    }
+    return mapped;
+  }
+
+  if (sourceType === "file" || sourceType === "file_id" || (!sourceType && typeof sourceObject.file_id === "string")) {
+    const fileId = trimNonEmptyString(sourceObject.file_id) ?? trimNonEmptyString(sourceObject.id);
+    if (!fileId) {
+      return undefined;
+    }
+
+    const mapped: Record<string, unknown> = {
+      type: "input_file",
+      file_id: fileId,
+    };
+    if (filename) {
+      mapped.filename = filename;
+    }
+    return mapped;
+  }
+
+  return undefined;
+}
+
+function mapAnthropicImagePart(partObject: Record<string, unknown>): Record<string, unknown> | undefined {
+  const source = partObject.source;
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return undefined;
+  }
+
+  const sourceObject = source as Record<string, unknown>;
+  const sourceType = typeof sourceObject.type === "string" ? sourceObject.type.trim().toLowerCase() : "";
+  const detail = normalizeResponsesImageDetail(partObject.detail ?? sourceObject.detail);
+
+  if (sourceType === "base64" || (!sourceType && typeof sourceObject.data === "string")) {
+    const data = trimNonEmptyString(sourceObject.data) ?? "";
+    const mediaType =
+      trimNonEmptyString(sourceObject.media_type) ??
+      trimNonEmptyString(sourceObject.mediaType) ??
+      (data ? detectImageMediaTypeFromBase64(data) : "");
+    if (!mediaType || !data) {
+      return undefined;
+    }
+
+    const mapped: Record<string, unknown> = {
+      type: "input_image",
+      image_url: `data:${mediaType};base64,${data}`,
+    };
+    if (detail) {
+      mapped.detail = detail;
+    }
+    return mapped;
+  }
+
+  if (sourceType === "url" || (!sourceType && typeof sourceObject.url === "string")) {
+    const url = trimNonEmptyString(sourceObject.url) ?? "";
+    if (!url) {
+      return undefined;
+    }
+
+    const mapped: Record<string, unknown> = {
+      type: "input_image",
+      image_url: url,
+    };
+    if (detail) {
+      mapped.detail = detail;
+    }
+    return mapped;
+  }
+
+  if (sourceType === "file" || sourceType === "file_id" || (!sourceType && typeof sourceObject.file_id === "string")) {
+    const fileId = trimNonEmptyString(sourceObject.file_id) ?? trimNonEmptyString(sourceObject.id) ?? "";
+    if (!fileId) {
+      return undefined;
+    }
+
+    return {
+      type: "input_image",
+      file_id: fileId,
+    };
+  }
+
+  return undefined;
+}
+
 export function approxTokenCount(body: JsonObject): number {
   const lines: string[] = [];
   if (Array.isArray(body?.messages)) {
@@ -82,34 +308,78 @@ export function sanitizeToolFields(body: JsonObject): number {
   return removed;
 }
 
-function normalizeToolResultContent(content: unknown): string {
+function normalizeToolResultOutput(content: unknown): string | Array<Record<string, unknown>> {
   if (typeof content === "string") {
     return content;
   }
   if (Array.isArray(content)) {
-    const parts: string[] = [];
+    const parts: Array<Record<string, unknown>> = [];
+    let sawNonTextPart = false;
+
+    const pushText = (text: string): void => {
+      if (text.length === 0) {
+        return;
+      }
+      parts.push({
+        type: "input_text",
+        text,
+      });
+    };
+
     for (const item of content) {
       if (typeof item === "string") {
-        parts.push(item);
+        pushText(item);
         continue;
       }
       if (!item || typeof item !== "object") {
+        if (item !== undefined && item !== null) {
+          sawNonTextPart = true;
+          pushText(maybeStringifyForModel(item));
+        }
         continue;
       }
-      const text = (item as Record<string, unknown>).text;
-      if (typeof text === "string") {
-        parts.push(text);
+
+      const itemObject = item as Record<string, unknown>;
+      const partType = typeof itemObject.type === "string" ? itemObject.type : "";
+      if (partType === "text") {
+        const text = trimNonEmptyString(itemObject.text);
+        if (text) {
+          pushText(text);
+        }
+        continue;
       }
+      if (partType === "image") {
+        const imagePart = mapAnthropicImagePart(itemObject);
+        if (imagePart) {
+          sawNonTextPart = true;
+          parts.push(imagePart);
+        }
+        continue;
+      }
+      if (partType === "document") {
+        const filePart = mapAnthropicFilePart(itemObject);
+        if (filePart) {
+          sawNonTextPart = true;
+          parts.push(filePart);
+          continue;
+        }
+      }
+
+      sawNonTextPart = true;
+      pushText(maybeStringifyForModel(itemObject));
     }
+
     if (parts.length > 0) {
-      return parts.join("\n");
+      if (!sawNonTextPart) {
+        return parts
+          .map((part) => (part.type === "input_text" && typeof part.text === "string" ? part.text : ""))
+          .filter((text) => text.length > 0)
+          .join("\n");
+      }
+      return parts;
     }
   }
-  try {
-    return JSON.stringify(content ?? "");
-  } catch {
-    return String(content ?? "");
-  }
+  return maybeStringifyForModel(content ?? "");
 }
 
 export function extractInstructionsFromSystem(systemField: unknown): string | undefined {
@@ -157,23 +427,23 @@ export function toResponsesInput(messages: unknown): Array<Record<string, unknow
     const role = typeof roleRaw === "string" ? roleRaw : "user";
     const contentRaw = (message as Record<string, unknown>).content;
 
-    const textParts: Array<Record<string, unknown>> = [];
-    const flushTextParts = (): void => {
-      if (textParts.length === 0) {
+    const messageContent: Array<Record<string, unknown>> = [];
+    const flushMessageContent = (): void => {
+      if (messageContent.length === 0) {
         return;
       }
       mapped.push({
         role,
-        content: [...textParts],
+        content: [...messageContent],
       });
-      textParts.length = 0;
+      messageContent.length = 0;
     };
 
     const pushText = (text: string): void => {
       if (text.length === 0) {
         return;
       }
-      textParts.push({
+      messageContent.push({
         type: textPartTypeForRole(role),
         text,
       });
@@ -181,7 +451,7 @@ export function toResponsesInput(messages: unknown): Array<Record<string, unknow
 
     if (typeof contentRaw === "string") {
       pushText(contentRaw);
-      flushTextParts();
+      flushMessageContent();
       continue;
     }
 
@@ -207,7 +477,7 @@ export function toResponsesInput(messages: unknown): Array<Record<string, unknow
           continue;
         }
 
-        flushTextParts();
+        flushMessageContent();
         const callIdRaw = partObject.id;
         const callId =
           typeof callIdRaw === "string" && callIdRaw.length > 0 ? callIdRaw : `call_${++fallbackCallId}`;
@@ -228,12 +498,28 @@ export function toResponsesInput(messages: unknown): Array<Record<string, unknow
           continue;
         }
 
-        flushTextParts();
+        flushMessageContent();
         mapped.push({
           type: "function_call_output",
           call_id: callId,
-          output: normalizeToolResultContent(partObject.content),
+          output: normalizeToolResultOutput(partObject.content),
         });
+        continue;
+      }
+
+      if (partType === "image") {
+        const imagePart = mapAnthropicImagePart(partObject);
+        if (imagePart) {
+          messageContent.push(imagePart);
+        }
+        continue;
+      }
+
+      if (partType === "document") {
+        const filePart = mapAnthropicFilePart(partObject);
+        if (filePart) {
+          messageContent.push(filePart);
+        }
         continue;
       }
 
@@ -249,7 +535,7 @@ export function toResponsesInput(messages: unknown): Array<Record<string, unknow
       }
     }
 
-    flushTextParts();
+    flushMessageContent();
   }
 
   return mapped;
@@ -294,6 +580,80 @@ function parseFunctionCallArguments(argumentsRaw: unknown): Record<string, unkno
   }
 }
 
+function extractWebCitationHitsFromAnnotations(annotations: unknown): Array<{ title: string; url: string }> {
+  if (!Array.isArray(annotations)) {
+    return [];
+  }
+
+  const hits: Array<{ title: string; url: string }> = [];
+  const seen = new Set<string>();
+
+  for (const annotation of annotations) {
+    if (!annotation || typeof annotation !== "object") {
+      continue;
+    }
+
+    const annotationObject = annotation as Record<string, unknown>;
+    const nested =
+      annotationObject.type === "url_citation" && annotationObject.url_citation && typeof annotationObject.url_citation === "object"
+        ? (annotationObject.url_citation as Record<string, unknown>)
+        : annotationObject;
+
+    const url = trimNonEmptyString(nested.url) ?? trimNonEmptyString(annotationObject.url);
+    if (!url || seen.has(url)) {
+      continue;
+    }
+
+    seen.add(url);
+    hits.push({
+      title: trimNonEmptyString(nested.title) ?? trimNonEmptyString(annotationObject.title) ?? url,
+      url,
+    });
+  }
+
+  return hits;
+}
+
+function extractWebSearchSources(action: unknown): Array<{ title: string; url: string }> {
+  if (!action || typeof action !== "object") {
+    return [];
+  }
+
+  const sources = (action as Record<string, unknown>).sources;
+  if (!Array.isArray(sources)) {
+    return [];
+  }
+
+  const hits: Array<{ title: string; url: string }> = [];
+  const seen = new Set<string>();
+  for (const source of sources) {
+    if (typeof source === "string") {
+      const url = source.trim();
+      if (!url || seen.has(url)) {
+        continue;
+      }
+      seen.add(url);
+      hits.push({ title: url, url });
+      continue;
+    }
+    if (!source || typeof source !== "object") {
+      continue;
+    }
+    const sourceObject = source as Record<string, unknown>;
+    const url = trimNonEmptyString(sourceObject.url) ?? trimNonEmptyString(sourceObject.link);
+    if (!url || seen.has(url)) {
+      continue;
+    }
+    seen.add(url);
+    hits.push({
+      title: trimNonEmptyString(sourceObject.title) ?? trimNonEmptyString(sourceObject.name) ?? url,
+      url,
+    });
+  }
+
+  return hits;
+}
+
 export function mapResponsesOutputToAnthropicContent(output: unknown): {
   content: Array<Record<string, unknown>>;
   stopReason: "tool_use" | "end_turn";
@@ -305,6 +665,8 @@ export function mapResponsesOutputToAnthropicContent(output: unknown): {
   const content: Array<Record<string, unknown>> = [];
   let hasToolUse = false;
   let fallbackToolUseId = 0;
+  const webSearchCalls: Array<{ id: string; query?: string; hits: Array<{ title: string; url: string }> }> = [];
+  const pendingCitationHits: Array<{ title: string; url: string }> = [];
 
   for (const item of output) {
     if (!item || typeof item !== "object") {
@@ -323,12 +685,30 @@ export function mapResponsesOutputToAnthropicContent(output: unknown): {
         const partType = typeof partObj.type === "string" ? partObj.type : "";
         const text = partObj.text;
         if ((partType === "output_text" || partType === "text") && typeof text === "string") {
+          pendingCitationHits.push(...extractWebCitationHitsFromAnnotations(partObj.annotations));
           content.push({
             type: "text",
             text,
           });
         }
       }
+      continue;
+    }
+
+    if (itemType === "web_search_call") {
+      const action = obj.action && typeof obj.action === "object" ? (obj.action as Record<string, unknown>) : undefined;
+      const query =
+        trimNonEmptyString(action?.query) ??
+        (Array.isArray(action?.queries)
+          ? (action?.queries as unknown[]).find((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+          : undefined);
+      const idRaw = obj.id ?? obj.call_id;
+      const id = typeof idRaw === "string" && idRaw.trim().length > 0 ? idRaw : `srvtoolu_${++fallbackToolUseId}`;
+      webSearchCalls.push({
+        id,
+        query,
+        hits: extractWebSearchSources(action),
+      });
       continue;
     }
 
@@ -348,6 +728,38 @@ export function mapResponsesOutputToAnthropicContent(output: unknown): {
       });
       hasToolUse = true;
     }
+  }
+
+  if (webSearchCalls.length > 0) {
+    const fallbackHits: Array<{ title: string; url: string }> = [];
+    const seenUrls = new Set<string>();
+    for (const hit of pendingCitationHits) {
+      if (seenUrls.has(hit.url)) {
+        continue;
+      }
+      seenUrls.add(hit.url);
+      fallbackHits.push(hit);
+    }
+
+    const synthesizedBlocks: Array<Record<string, unknown>> = [];
+    for (const call of webSearchCalls) {
+      synthesizedBlocks.push({
+        type: "server_tool_use",
+        id: call.id,
+        name: "web_search",
+        input: call.query ? { query: call.query } : {},
+      });
+      const hits = call.hits.length > 0 ? call.hits : fallbackHits;
+      synthesizedBlocks.push({
+        type: "web_search_tool_result",
+        tool_use_id: call.id,
+        content: hits.map((hit) => ({
+          title: hit.title,
+          url: hit.url,
+        })),
+      });
+    }
+    content.unshift(...synthesizedBlocks);
   }
 
   return {

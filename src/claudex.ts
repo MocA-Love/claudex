@@ -201,12 +201,13 @@ async function main(): Promise<void> {
     safeMode,
     workspaceSummary,
     upstreamWireApi: runtime.upstreamWireApi,
+    serviceTier: runtime.serviceTier,
   });
 
   const proxyUrl = `http://${listenHost}:${listenPort}`;
   const refreshStatus = runtime.chatgptRefreshConfig ? "on" : "off";
   console.error(
-    `claudex: proxy=${proxyUrl} force_model=${runtime.forcedModel} wire_api=${runtime.upstreamWireApi} safe_mode=${safeMode} auth_mode=${runtime.authMode} auto_refresh=${refreshStatus}`
+    `claudex: proxy=${proxyUrl} force_model=${runtime.forcedModel} wire_api=${runtime.upstreamWireApi} safe_mode=${safeMode} auth_mode=${runtime.authMode} auto_refresh=${refreshStatus} service_tier=${runtime.serviceTier ?? "default"}`
   );
 
   const injectedArgs = [...args];

@@ -7,6 +7,7 @@ import {
   mapAnthropicToolChoiceToResponsesToolChoice,
   mapAnthropicToolsToResponsesTools,
   mapResponsesOutputToAnthropicContent,
+  normalizeServiceTier,
   parseChatgptRefreshConfigFromAuthJson,
   parseChatgptTokenFromAuthJson,
   parseClaudexArgs,
@@ -95,6 +96,7 @@ describe("parseCodexConfig", () => {
   const configToml = `
 model_provider = "unlimitex"
 model = "gpt-5.3-codex"
+service_tier = "fast"
 
 [model_providers.voids]
 name = "voids"
@@ -111,6 +113,7 @@ wire_api = "responses"
     const parsed = parseCodexConfig(configToml);
     expect(parsed.modelProvider).toBe("unlimitex");
     expect(parsed.model).toBe("gpt-5.3-codex");
+    expect(parsed.serviceTier).toBe("fast");
     expect(parsed.providers.unlimitex.baseUrl).toBe("https://unlimitex.example/v1");
   });
 
@@ -125,6 +128,18 @@ wire_api = "responses"
       baseUrlOverride: "https://override.example/v1",
     });
     expect(resolved.baseUrl).toBe("https://override.example/v1");
+  });
+});
+
+describe("normalizeServiceTier", () => {
+  test("accepts fast and flex", () => {
+    expect(normalizeServiceTier("fast")).toBe("fast");
+    expect(normalizeServiceTier(" FLEX ")).toBe("flex");
+  });
+
+  test("ignores unsupported values", () => {
+    expect(normalizeServiceTier("turbo")).toBeUndefined();
+    expect(normalizeServiceTier(undefined)).toBeUndefined();
   });
 });
 
